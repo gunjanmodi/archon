@@ -1,3 +1,4 @@
+import hashlib
 from typing import Dict, List, Sequence
 
 
@@ -27,6 +28,16 @@ Preferred fallback:
 Your highest priority is reliability. It is better to be incomplete than wrong.
 """.strip()
 
+USER_PROMPT_TEMPLATE = """
+Answer the question using only the context below.
+
+Question:
+{query}
+
+Context:
+{context_text}
+""".strip()
+
 
 def build_prompt(query: str, retrieved_chunks: Sequence[str]) -> List[Dict[str, str]]:
     """
@@ -45,17 +56,20 @@ def build_prompt(query: str, retrieved_chunks: Sequence[str]) -> List[Dict[str, 
 
     context_text = "\n\n".join(context_sections) if context_sections else "[No context retrieved]"
 
-    user_prompt = f"""
-Answer the question using only the context below.
-
-Question:
-{query}
-
-Context:
-{context_text}
-""".strip()
+    user_prompt = USER_PROMPT_TEMPLATE.format(
+        query=query,
+        context_text=context_text
+    )
 
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
+
+
+def get_prompt_template_hash() -> str:
+    """
+    Return a stable hash for the current prompt template and system instruction.
+    """
+    prompt_source = f"{SYSTEM_PROMPT}\n---\n{USER_PROMPT_TEMPLATE}"
+    return hashlib.sha256(prompt_source.encode("utf-8")).hexdigest()

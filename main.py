@@ -10,11 +10,13 @@ load_dotenv()
 from embedding import get_embedding
 from database import init_db, close_db, insert_embedding, insert_embeddings_batch, search_embeddings
 from chunking import chunk_text
-from prompt import build_prompt
-from generation import generate_response
-from citations import find_fabricated_citations
+from prompt import build_prompt, get_prompt_template_hash
+from generation import GENERATION_MODEL, generate_response
+from citations import extract_citations, find_fabricated_citations
+from semantic_cache import lookup_cached_response, store_cached_response
 
 MIN_SIMILARITY_THRESHOLD = 0.4 # todo: domain level answer may need different configuration query level
+PROMPT_TEMPLATE_HASH = get_prompt_template_hash()
 
 
 # Request/Response models
@@ -173,6 +175,17 @@ async def ask_question(request: AskRequest):
     Run the full RAG flow: embed query, retrieve context, build prompt, and generate an answer.
     """
     query_embedding = get_embedding([request.query])[0]
+    cache_hit = await lookup_cached_response(
+        query_embedding=query_embedding,
+        model_name=GENERATION_MODEL,
+        prompt_template_hash=PROMPT_TEMPLATE_HASH
+    )
+    if cache_hit is not None:
+        return AskResponse(
+            answer=cache_hit.response_text,
+            context_chunks=cache_hit.response_metadata.get("context_chunks", [])
+        )
+
     search_results = await search_embeddings(
         embedding=query_embedding,
         top_k=request.top_k
@@ -196,6 +209,19 @@ async def ask_question(request: AskRequest):
             answer="The system could not produce a reliably grounded answer from the retrieved context.",
             context_chunks=context_chunks
         )
+
+    await store_cached_response(
+        query_text=request.query,
+        query_embedding=query_embedding,
+        response_text=answer,
+        response_metadata={
+            "context_chunks": context_chunks,
+            "top_similarity_score": top_similarity_score,
+            "cited_chunks": sorted(extract_citations(answer)),
+        },
+        model_name=GENERATION_MODEL,
+        prompt_template_hash=PROMPT_TEMPLATE_HASH
+    )
 
     return AskResponse(
         answer=answer,

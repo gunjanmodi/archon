@@ -117,9 +117,29 @@ async def run_eval_case(case: EvalCase) -> Tuple[bool, List[str]]:
         llm_called = True
         return iter(case.generated_chunks)
 
+    async def fake_lookup_cached_response(
+        query_embedding: List[float],
+        model_name: str,
+        prompt_template_hash: str,
+        similarity_threshold: float = 0.95
+    ):
+        return None
+
+    async def fake_store_cached_response(
+        query_text: str,
+        query_embedding: List[float],
+        response_text: str,
+        response_metadata: dict,
+        model_name: str,
+        prompt_template_hash: str
+    ) -> int:
+        return 1
+
     with patch("main.get_embedding", fake_get_embedding), patch(
         "main.search_embeddings", fake_search_embeddings
-    ), patch("main.generate_response", fake_generate_response):
+    ), patch("main.generate_response", fake_generate_response), patch(
+        "main.lookup_cached_response", fake_lookup_cached_response
+    ), patch("main.store_cached_response", fake_store_cached_response):
         response = await ask_question(AskRequest(query=case.query, top_k=case.top_k))
 
     observation = EvalObservation(
