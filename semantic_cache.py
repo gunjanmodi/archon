@@ -3,8 +3,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from database import embedding_to_pgvector, get_connection
+from logging_config import get_logger
 
 SEMANTIC_CACHE_THRESHOLD = 0.95
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -43,6 +45,15 @@ async def lookup_cached_response(
         )
 
         if row is None or row["similarity_score"] < similarity_threshold:
+            logger.info(
+                "semantic cache miss",
+                extra={
+                    "event": "semantic_cache_miss",
+                    "similarity_score": None if row is None else row["similarity_score"],
+                    "similarity_threshold": similarity_threshold,
+                    "model_name": model_name,
+                }
+            )
             return None
 
         await conn.execute(
@@ -55,6 +66,15 @@ async def lookup_cached_response(
             row["id"]
         )
 
+    logger.info(
+        "semantic cache hit",
+        extra={
+            "event": "semantic_cache_hit",
+            "cache_id": row["id"],
+            "similarity_score": row["similarity_score"],
+            "model_name": model_name,
+        }
+    )
     return SemanticCacheHit(
         response_text=row["response_text"],
         response_metadata=row["response_metadata"],
@@ -95,4 +115,13 @@ async def store_cached_response(
             prompt_template_hash
         )
 
+    logger.info(
+        "semantic cache stored",
+        extra={
+            "event": "semantic_cache_store",
+            "cache_id": cache_id,
+            "model_name": model_name,
+            "response_length": len(response_text),
+        }
+    )
     return cache_id

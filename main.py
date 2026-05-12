@@ -1,5 +1,9 @@
 from contextlib import asynccontextmanager
+from time import perf_counter
+from uuid import uuid4
+
 from fastapi import FastAPI
+from fastapi import Request
 from pydantic import BaseModel
 from typing import List
 from dotenv import load_dotenv
@@ -14,9 +18,12 @@ from prompt import build_prompt, get_prompt_template_hash
 from generation import GENERATION_MODEL, generate_response
 from citations import extract_citations, find_fabricated_citations
 from semantic_cache import lookup_cached_response, store_cached_response
+from logging_config import get_logger, set_request_id, setup_logging
 
 MIN_SIMILARITY_THRESHOLD = 0.4 # todo: domain level answer may need different configuration query level
 PROMPT_TEMPLATE_HASH = get_prompt_template_hash()
+setup_logging()
+logger = get_logger(__name__)
 
 
 # Request/Response models
@@ -79,16 +86,50 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     await init_db()
-    print("Database pool initialized")
+    logger.info("database pool initialized", extra={"event": "database_pool_initialized"})
     
     yield
     
     # Shutdown
     await close_db()
-    print("Database pool closed")
+    logger.info("database pool closed", extra={"event": "database_pool_closed"})
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = str(uuid4())
+    set_request_id(request_id)
+    start_time = perf_counter()
+    logger.info(
+        "request started",
+        extra={
+            "event": "request_started",
+            "method": request.method,
+            "path": request.url.path,
+        }
+    )
+    response = None
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        duration_ms = round((perf_counter() - start_time) * 1000, 2)
+        logger.info(
+            "request completed",
+            extra={
+                "event": "request_completed",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": None if response is None else response.status_code,
+                "duration_ms": duration_ms,
+            }
+        )
+        if response is not None:
+            response.headers["X-Request-ID"] = request_id
+        set_request_id(None)
 
 
 @app.post("/documents", response_model=DocumentResponse)
@@ -123,7 +164,16 @@ async def ingest_document(request: IngestDocumentRequest):
         chunk_size=request.chunk_size,
         chunk_overlap=request.chunk_overlap
     )
-    print("Chunks: ", chunks)
+    logger.info(
+        "document chunked",
+        extra={
+            "event": "document_chunked",
+            "document_id": request.document_id,
+            "chunk_count": len(chunks),
+            "chunk_size": request.chunk_size,
+            "chunk_overlap": request.chunk_overlap,
+        }
+    )
     embeddings = get_embedding([chunk.text for chunk in chunks])
     inserted_ids = await insert_embeddings_batch(
         chunks=chunks,
@@ -174,6 +224,14 @@ async def ask_question(request: AskRequest):
     """
     Run the full RAG flow: embed query, retrieve context, build prompt, and generate an answer.
     """
+    logger.info(
+        "ask request received",
+        extra={
+            "event": "ask_request_received",
+            "query_preview": request.query[:100] + ("..." if len(request.query) > 100 else ""),
+            "top_k": request.top_k,
+        }
+    )
     query_embedding = get_embedding([request.query])[0]
     cache_hit = await lookup_cached_response(
         query_embedding=query_embedding,
@@ -181,10 +239,18 @@ async def ask_question(request: AskRequest):
         prompt_template_hash=PROMPT_TEMPLATE_HASH
     )
     if cache_hit is not None:
+        logger.info(
+            "ask cache hit",
+            extra={
+                "event": "ask_cache_hit",
+                "similarity_score": cache_hit.similarity_score,
+            }
+        )
         return AskResponse(
             answer=cache_hit.response_text,
             context_chunks=cache_hit.response_metadata.get("context_chunks", [])
         )
+    logger.info("ask cache miss", extra={"event": "ask_cache_miss"})
 
     search_results = await search_embeddings(
         embedding=query_embedding,
@@ -192,7 +258,24 @@ async def ask_question(request: AskRequest):
     )
     context_chunks = [result[1] for result in search_results]
     top_similarity_score = search_results[0][3] if search_results else 0.0
+    logger.info(
+        "retrieval completed",
+        extra={
+            "event": "retrieval_completed",
+            "retrieved_chunk_count": len(context_chunks),
+            "top_similarity_score": top_similarity_score,
+            "retrieval_scores": [result[3] for result in search_results],
+        }
+    )
     if top_similarity_score < MIN_SIMILARITY_THRESHOLD:
+        logger.info(
+            "ask rejected for low similarity",
+            extra={
+                "event": "ask_rejected_low_similarity",
+                "top_similarity_score": top_similarity_score,
+                "similarity_threshold": MIN_SIMILARITY_THRESHOLD,
+            }
+        )
         return AskResponse(
             answer="The provided context does not contain enough information to answer this reliably.",
             context_chunks=context_chunks
@@ -202,9 +285,34 @@ async def ask_question(request: AskRequest):
         query=request.query,
         retrieved_chunks=context_chunks
     )
+    logger.info(
+        "llm generation started",
+        extra={
+            "event": "llm_generation_started",
+            "model_name": GENERATION_MODEL,
+            "context_chunk_count": len(context_chunks),
+        }
+    )
     answer = "".join(generate_response(messages))
+    cited_chunks = sorted(extract_citations(answer))
+    logger.info(
+        "generation completed",
+        extra={
+            "event": "generation_completed",
+            "response_length": len(answer),
+            "citation_count": len(cited_chunks),
+        }
+    )
     fabricated_citations = find_fabricated_citations(answer, len(context_chunks))
     if fabricated_citations:
+        logger.info(
+            "ask rejected for fabricated citations",
+            extra={
+                "event": "ask_rejected_fabricated_citations",
+                "fabricated_citations": sorted(fabricated_citations),
+                "retrieved_chunk_count": len(context_chunks),
+            }
+        )
         return AskResponse(
             answer="The system could not produce a reliably grounded answer from the retrieved context.",
             context_chunks=context_chunks
@@ -217,12 +325,20 @@ async def ask_question(request: AskRequest):
         response_metadata={
             "context_chunks": context_chunks,
             "top_similarity_score": top_similarity_score,
-            "cited_chunks": sorted(extract_citations(answer)),
+            "cited_chunks": cited_chunks,
         },
         model_name=GENERATION_MODEL,
         prompt_template_hash=PROMPT_TEMPLATE_HASH
     )
 
+    logger.info(
+        "ask response returned",
+        extra={
+            "event": "ask_response_returned",
+            "response_length": len(answer),
+            "citation_count": len(cited_chunks),
+        }
+    )
     return AskResponse(
         answer=answer,
         context_chunks=context_chunks
