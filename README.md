@@ -273,3 +273,12 @@ docker compose up --build
 ```
 
 The API will be available at `http://localhost:8000` and Postgres at `localhost:5432`.
+
+## Unit Tests
+Install dependencies and run the pytest suite:
+
+```bash
+pip install -r requirements.txt
+pytest test_ask.py
+pytest test_citation.py
+```
