@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
+import os
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi import Request
 from pydantic import BaseModel
 from typing import List
@@ -11,14 +12,14 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from embedding import get_embedding
 from database import init_db, close_db, insert_embedding, insert_embeddings_batch, search_embeddings
 from chunking import chunk_text
 from prompt import build_prompt, get_prompt_template_hash
-from generation import GENERATION_MODEL, generate_response
 from citations import extract_citations, find_fabricated_citations
 from semantic_cache import lookup_cached_response, store_cached_response
 from logging_config import get_logger, set_request_id, setup_logging
+from llm_provider import EmbeddingProvider, GenerationProvider
+from openai_providers import OpenAIEmbeddingProvider, OpenAIGenerationProvider
 
 MIN_SIMILARITY_THRESHOLD = 0.4 # todo: domain level answer may need different configuration query level
 PROMPT_TEMPLATE_HASH = get_prompt_template_hash()
@@ -85,7 +86,25 @@ async def lifespan(app: FastAPI):
     Initializes pool on startup, closes on shutdown.
     """
     # Startup
+    embedding_provider_name = os.getenv("EMBEDDING_PROVIDER", "openai")
+    generation_provider_name = os.getenv("GENERATION_PROVIDER", "openai")
+
+    if embedding_provider_name != "openai":
+        raise ValueError(f"Unsupported embedding provider: {embedding_provider_name}")
+    if generation_provider_name != "openai":
+        raise ValueError(f"Unsupported generation provider: {generation_provider_name}")
+
+    app.state.embedding_provider = OpenAIEmbeddingProvider()
+    app.state.generation_provider = OpenAIGenerationProvider()
     await init_db()
+    logger.info(
+        "application dependencies initialized",
+        extra={
+            "event": "application_dependencies_initialized",
+            "embedding_provider": embedding_provider_name,
+            "generation_provider": generation_provider_name,
+        }
+    )
     logger.info("database pool initialized", extra={"event": "database_pool_initialized"})
     
     yield
@@ -96,6 +115,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def get_embedding_provider(request: Request) -> EmbeddingProvider:
+    return request.app.state.embedding_provider
+
+
+def get_generation_provider(request: Request) -> GenerationProvider:
+    return request.app.state.generation_provider
 
 
 @app.middleware("http")
@@ -133,13 +160,16 @@ async def request_logging_middleware(request: Request, call_next):
 
 
 @app.post("/documents", response_model=DocumentResponse)
-async def create_document(request: DocumentRequest):
+async def create_document(
+    request: DocumentRequest,
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider)
+):
     """
     Create a new document chunk with embedding.
     Takes text and document_id, generates embedding, and stores it.
     """
     # Generate embedding from text
-    embedding = get_embedding([request.text])[0]
+    embedding = embedding_provider.embed_texts([request.text]).embeddings[0]
 
     # Store in database
     row_id = await insert_embedding(
@@ -155,7 +185,10 @@ async def create_document(request: DocumentRequest):
 
 
 @app.post("/documents/ingest", response_model=IngestDocumentResponse)
-async def ingest_document(request: IngestDocumentRequest):
+async def ingest_document(
+    request: IngestDocumentRequest,
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider)
+):
     """
     Ingest a full document end to end by chunking, embedding, and storing it.
     """
@@ -174,7 +207,7 @@ async def ingest_document(request: IngestDocumentRequest):
             "chunk_overlap": request.chunk_overlap,
         }
     )
-    embeddings = get_embedding([chunk.text for chunk in chunks])
+    embeddings = embedding_provider.embed_texts([chunk.text for chunk in chunks]).embeddings
     inserted_ids = await insert_embeddings_batch(
         chunks=chunks,
         embeddings=embeddings,
@@ -190,14 +223,17 @@ async def ingest_document(request: IngestDocumentRequest):
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search_documents(request: SearchRequest):
+async def search_documents(
+    request: SearchRequest,
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider)
+):
     """
     Search for similar document chunks based on query string.
     Uses cosine similarity of embeddings.
     """
     # todo: Chunker works on raw text. But it has no awareness of document structure. It'll happily cut a sentence in half, or split a heading from its paragraph. The overlap helps, but it doesn't solve it completely.
     # Generate embedding from query
-    query_embedding = get_embedding([request.query])[0]
+    query_embedding = embedding_provider.embed_texts([request.query]).embeddings[0]
     
     # Query database for similar embeddings
     search_results = await search_embeddings(
@@ -220,7 +256,11 @@ async def search_documents(request: SearchRequest):
 
 
 @app.post("/ask", response_model=AskResponse)
-async def ask_question(request: AskRequest):
+async def ask_question(
+    request: AskRequest,
+    embedding_provider: EmbeddingProvider = Depends(get_embedding_provider),
+    generation_provider: GenerationProvider = Depends(get_generation_provider)
+):
     """
     Run the full RAG flow: embed query, retrieve context, build prompt, and generate an answer.
     """
@@ -232,10 +272,11 @@ async def ask_question(request: AskRequest):
             "top_k": request.top_k,
         }
     )
-    query_embedding = get_embedding([request.query])[0]
+    query_embedding_result = embedding_provider.embed_texts([request.query])
+    query_embedding = query_embedding_result.embeddings[0]
     cache_hit = await lookup_cached_response(
         query_embedding=query_embedding,
-        model_name=GENERATION_MODEL,
+        model_name=generation_provider.model_name,
         prompt_template_hash=PROMPT_TEMPLATE_HASH
     )
     if cache_hit is not None:
@@ -289,11 +330,12 @@ async def ask_question(request: AskRequest):
         "llm generation started",
         extra={
             "event": "llm_generation_started",
-            "model_name": GENERATION_MODEL,
+            "model_name": generation_provider.model_name,
             "context_chunk_count": len(context_chunks),
         }
     )
-    answer = "".join(generate_response(messages))
+    generation_result = generation_provider.generate(messages)
+    answer = generation_result.content
     cited_chunks = sorted(extract_citations(answer))
     logger.info(
         "generation completed",
@@ -301,6 +343,8 @@ async def ask_question(request: AskRequest):
             "event": "generation_completed",
             "response_length": len(answer),
             "citation_count": len(cited_chunks),
+            "input_tokens": generation_result.input_tokens,
+            "output_tokens": generation_result.output_tokens,
         }
     )
     fabricated_citations = find_fabricated_citations(answer, len(context_chunks))
@@ -327,7 +371,7 @@ async def ask_question(request: AskRequest):
             "top_similarity_score": top_similarity_score,
             "cited_chunks": cited_chunks,
         },
-        model_name=GENERATION_MODEL,
+        model_name=generation_result.model_name,
         prompt_template_hash=PROMPT_TEMPLATE_HASH
     )
 

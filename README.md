@@ -89,7 +89,7 @@ Why this approach was chosen:
 What this stage implements:
 - Semantic retrieval over pgvector using cosine similarity.
 - Prompt builder isolated in `prompt.py`.
-- LLM answer generation isolated in `generation.py`.
+- LLM answer generation isolated behind the `GenerationProvider` abstraction with OpenAI-specific logic in `openai_providers.py`.
 - `/ask` endpoint that runs the full RAG flow.
 
 Tradeoffs considered:

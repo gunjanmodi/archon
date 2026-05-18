@@ -103,19 +103,11 @@ def acknowledges_uncertainty() -> Assertion:
 async def run_eval_case(case: EvalCase) -> Tuple[bool, List[str]]:
     llm_called = False
 
-    def fake_get_embedding(_: List[str]) -> List[List[float]]:
-        return [[0.1, 0.2, 0.3]]
-
     async def fake_search_embeddings(
         embedding: List[float],
         top_k: int = 5
     ) -> Sequence[Tuple[int, str, str, float]]:
         return case.search_results[:top_k]
-
-    def fake_generate_response(_: List[dict]) -> Iterable[str]:
-        nonlocal llm_called
-        llm_called = True
-        return iter(case.generated_chunks)
 
     async def fake_lookup_cached_response(
         query_embedding: List[float],
@@ -135,12 +127,47 @@ async def run_eval_case(case: EvalCase) -> Tuple[bool, List[str]]:
     ) -> int:
         return 1
 
-    with patch("main.get_embedding", fake_get_embedding), patch(
-        "main.search_embeddings", fake_search_embeddings
-    ), patch("main.generate_response", fake_generate_response), patch(
+    class StubEmbeddingProvider:
+        model_name = "test-embedding-model"
+
+        def embed_texts(self, texts):
+            return type(
+                "EmbeddingResult",
+                (),
+                {
+                    "embeddings": [[0.1, 0.2, 0.3] for _ in texts],
+                    "input_tokens": None,
+                },
+            )()
+
+    class StubGenerationProvider:
+        model_name = "test-generation-model"
+
+        def generate(self, messages):
+            nonlocal llm_called
+            llm_called = True
+            return type(
+                "GenerationResult",
+                (),
+                {
+                    "content": "".join(case.generated_chunks),
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "model_name": self.model_name,
+                },
+            )()
+
+        def stream_generate(self, messages):
+            return iter(case.generated_chunks)
+
+    with patch("main.search_embeddings", fake_search_embeddings), patch(
         "main.lookup_cached_response", fake_lookup_cached_response
     ), patch("main.store_cached_response", fake_store_cached_response):
-        response = await ask_question(AskRequest(query=case.query, top_k=case.top_k))
+        response = await ask_question(
+            AskRequest(query=case.query, top_k=case.top_k),
+            embedding_provider=StubEmbeddingProvider(),
+            generation_provider=StubGenerationProvider(),
+        )
 
     observation = EvalObservation(
         response=response,
