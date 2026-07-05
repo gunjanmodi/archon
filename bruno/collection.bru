@@ -1,0 +1,46 @@
+headers {
+  Content-Type: application/json
+}
+
+docs {
+  # Archon - FastAPI RAG System
+
+  This collection covers every HTTP endpoint exposed by the Archon service: a
+  retrieval-augmented generation (RAG) API built with FastAPI, PostgreSQL +
+  pgvector, and a pluggable LLM provider layer.
+
+  By default this service runs against **local Ollama models**
+  (`nomic-embed-text` for embeddings, `llama3.1:8b` for generation) — no
+  external API calls or API key required. It can be switched back to OpenAI
+  by setting `EMBEDDING_PROVIDER=openai` / `GENERATION_PROVIDER=openai` in
+  `.env`.
+
+  ## Flow
+
+  1. **Ingest** content via `Documents/Ingest Document` (chunking + batch
+     embedding) or `Documents/Create Document` (single chunk, no chunking).
+  2. **Search** for semantically relevant chunks via `Search/Search Documents`.
+  3. **Ask** a question end-to-end via `Ask/Ask Question` — this embeds the
+     query, retrieves context, checks a semantic cache, builds a prompt,
+     generates an answer with an LLM, and validates citations before
+     returning.
+
+  ## Environment
+
+  Select the **Local** environment (or create your own) and set `baseUrl` to
+  wherever the service is running, e.g. `http://localhost:8000` when running
+  via `docker compose up`.
+
+  ## Notes
+
+  - All requests/responses are JSON.
+  - There is no authentication layer on these endpoints currently.
+  - `/ask` may short-circuit with a fixed message instead of calling the LLM
+    when retrieval similarity is below the configured threshold, or when the
+    generated answer contains citations that don't map to any retrieved
+    chunk (fabricated citations).
+  - The vector column dimension in Postgres must match whichever embedding
+    model is active (768 for `nomic-embed-text`, 1536 for OpenAI's
+    `text-embedding-3-small`). Switching providers on an existing database
+    requires migrating that column, not just changing env vars.
+}

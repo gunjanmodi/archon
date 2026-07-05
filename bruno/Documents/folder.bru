@@ -1,0 +1,12 @@
+meta {
+  name: Documents
+  seq: 1
+}
+
+docs {
+  Endpoints for storing content that will later be retrieved by `/search`
+  and `/ask`. Both endpoints generate embeddings via the configured
+  `EmbeddingProvider` (Ollama `nomic-embed-text`, 768 dims, by default; or
+  OpenAI `text-embedding-3-small` if `EMBEDDING_PROVIDER=openai`) and persist
+  them to the `embeddings` table in Postgres/pgvector.
+}

@@ -1,0 +1,56 @@
+meta {
+  name: Create Document
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/documents
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "text": "Bruno is an open source, offline-first API client that stores collections as plain text files.",
+    "document_id": "doc-001"
+  }
+}
+
+vars:pre-request {
+  baseUrl: http://localhost:8000
+}
+
+docs {
+  ## Create Document
+  
+  Stores a single piece of text as one embedding record — no chunking is
+  performed. Use this for short, already-atomic pieces of content. For long
+  documents that need to be split into multiple chunks, use
+  `Documents/Ingest Document` instead.
+  
+  ### Request body
+  
+  | Field         | Type   | Required | Description                                   |
+  |---------------|--------|----------|------------------------------------------------|
+  | `text`        | string | yes      | Raw text to embed and store.                    |
+  | `document_id` | string | yes      | Logical identifier grouping chunks/documents.   |
+  
+  ### Response `200`
+  
+  ```json
+  {
+    "id": 1,
+    "message": "Document stored successfully"
+  }
+  ```
+  
+  | Field     | Type   | Description                          |
+  |-----------|--------|----------------------------------------|
+  | `id`      | int    | Primary key of the inserted row in `embeddings`. |
+  | `message` | string | Human-readable confirmation.           |
+}

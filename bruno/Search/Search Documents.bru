@@ -1,0 +1,60 @@
+meta {
+  name: Search Documents
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/search
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "How does the system decide chunk size for ingestion?",
+    "top_k": 5
+  }
+}
+
+docs {
+  ## Search Documents
+
+  Embeds `query` with the configured `EmbeddingProvider`, then returns the
+  `top_k` most similar chunks from the `embeddings` table by cosine
+  similarity. No LLM generation, similarity threshold fallback, or citation
+  checking is applied here — see `Ask/Ask Question` for the full RAG flow.
+
+  ### Request body
+
+  | Field    | Type   | Required | Default | Description                                |
+  |----------|--------|----------|---------|----------------------------------------------|
+  | `query`  | string | yes      | —       | Natural-language search query.                |
+  | `top_k`  | int    | no       | `5`     | Number of results to return.                  |
+
+  ### Response `200`
+
+  ```json
+  {
+    "results": [
+      {
+        "id": 1,
+        "text_chunk": "Archon is a retrieval-augmented generation system...",
+        "document_id": "doc-architecture-overview",
+        "similarity_score": 0.83
+      }
+    ]
+  }
+  ```
+
+  | Field                       | Type   | Description                                  |
+  |------------------------------|--------|-------------------------------------------------|
+  | `results[].id`               | int    | Row id in `embeddings`.                          |
+  | `results[].text_chunk`       | string | The stored chunk text.                           |
+  | `results[].document_id`      | string | Document the chunk belongs to.                   |
+  | `results[].similarity_score` | float  | Cosine similarity to the query (higher = closer).|
+}

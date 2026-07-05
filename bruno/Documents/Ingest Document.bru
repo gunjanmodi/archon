@@ -1,0 +1,63 @@
+meta {
+  name: Ingest Document
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/documents/ingest
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "text": "Archon is a retrieval-augmented generation system built with FastAPI, PostgreSQL, and pgvector. It ingests documents, splits them into token-based chunks, generates embeddings for each chunk, and stores them for later semantic retrieval. When a user asks a question, the system embeds the query, retrieves the most relevant chunks by cosine similarity, builds a grounded prompt, and asks an LLM to answer using only the retrieved context. Citations are validated against the retrieved chunks, and a semantic cache avoids recomputing answers for near-duplicate questions.",
+    "document_id": "doc-architecture-overview",
+    "chunk_size": 500,
+    "chunk_overlap": 50
+  }
+}
+
+docs {
+  ## Ingest Document
+
+  End-to-end ingestion for a full document: splits `text` into token-based
+  chunks (`chunk_text`), generates embeddings for every chunk in a single
+  batch request, and batch-inserts them into the `embeddings` table.
+
+  ### Request body
+
+  | Field           | Type   | Required | Default | Description                                              |
+  |------------------|--------|----------|---------|------------------------------------------------------------|
+  | `text`           | string | yes      | —       | Full document text to chunk, embed, and store.              |
+  | `document_id`    | string | yes      | —       | Logical identifier shared by all chunks of this document.   |
+  | `chunk_size`     | int    | no       | `500`   | Target chunk size, in tokens.                                |
+  | `chunk_overlap`  | int    | no       | `50`    | Token overlap between consecutive chunks.                    |
+
+  ### Response `200`
+
+  ```json
+  {
+    "document_id": "doc-architecture-overview",
+    "chunk_count": 1,
+    "inserted_ids": [1],
+    "message": "Document ingested successfully"
+  }
+  ```
+
+  | Field           | Type      | Description                                   |
+  |------------------|-----------|-------------------------------------------------|
+  | `document_id`    | string    | Echoes the request's `document_id`.              |
+  | `chunk_count`    | int       | Number of chunks produced from `text`.           |
+  | `inserted_ids`   | int[]     | Primary keys of the inserted `embeddings` rows.  |
+  | `message`        | string    | Human-readable confirmation.                     |
+
+  Note: chunking is token-based, not character-based — very short input may
+  still produce more than one chunk, or a single chunk smaller than
+  `chunk_size` if the text doesn't reach the target length.
+}

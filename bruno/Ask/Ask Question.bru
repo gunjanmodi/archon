@@ -1,0 +1,88 @@
+meta {
+  name: Ask Question
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/ask
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "What database does Archon use for storing embeddings?",
+    "top_k": 5
+  }
+}
+
+docs {
+  ## Ask Question
+
+  Runs the complete RAG pipeline for a natural-language question:
+
+  1. Embed `query` with the `EmbeddingProvider`.
+  2. Check the semantic cache for a near-duplicate prior question (same
+     generation model + prompt template hash). On a cache hit, the cached
+     answer is returned immediately.
+  3. On a cache miss, retrieve the `top_k` most similar chunks from
+     `embeddings`.
+  4. If the top retrieval similarity score is below `0.4`
+     (`MIN_SIMILARITY_THRESHOLD`), skip generation entirely and return a
+     fixed low-confidence message.
+  5. Otherwise, build a grounded prompt from the retrieved chunks and
+     generate an answer with the `GenerationProvider` (Ollama `llama3.1:8b`
+     by default; or OpenAI `gpt-4o` if `GENERATION_PROVIDER=openai`).
+  6. Extract citations from the answer and reject the response — returning a
+     fixed message instead — if any citation doesn't map to a retrieved
+     chunk (a "fabricated citation").
+  7. Cache the accepted answer for future near-duplicate questions.
+
+  ### Request body
+
+  | Field    | Type   | Required | Default | Description                          |
+  |----------|--------|----------|---------|----------------------------------------|
+  | `query`  | string | yes      | —       | Natural-language question.              |
+  | `top_k`  | int    | no       | `5`     | Number of chunks to retrieve as context.|
+
+  ### Response `200` — grounded answer
+
+  ```json
+  {
+    "answer": "The context supports that Archon uses [Chunk 1] pgvector in conjunction with PostgreSQL to store the generated embeddings.",
+    "context_chunks": [
+      "Archon is a retrieval-augmented generation system built with FastAPI, PostgreSQL, and pgvector..."
+    ]
+  }
+  ```
+
+  ### Response `200` — low-similarity fallback
+
+  ```json
+  {
+    "answer": "The provided context does not contain enough information to answer this reliably.",
+    "context_chunks": []
+  }
+  ```
+
+  ### Response `200` — fabricated citation fallback
+
+  ```json
+  {
+    "answer": "The system could not produce a reliably grounded answer from the retrieved context.",
+    "context_chunks": [
+      "Archon is a retrieval-augmented generation system built with FastAPI, PostgreSQL, and pgvector..."
+    ]
+  }
+  ```
+
+  | Field             | Type     | Description                                              |
+  |--------------------|----------|-------------------------------------------------------------|
+  | `answer`           | string   | Generated answer, or a fixed fallback message.               |
+  | `context_chunks`   | string[] | Text of the chunks retrieved and used as context.            |
+}
