@@ -20,6 +20,7 @@ from semantic_cache import lookup_cached_response, store_cached_response
 from logging_config import get_logger, set_request_id, setup_logging
 from llm_provider import EmbeddingProvider, GenerationProvider
 from openai_providers import OpenAIEmbeddingProvider, OpenAIGenerationProvider
+from ollama_providers import OllamaEmbeddingProvider, OllamaGenerationProvider
 
 MIN_SIMILARITY_THRESHOLD = 0.4 # todo: domain level answer may need different configuration query level
 PROMPT_TEMPLATE_HASH = get_prompt_template_hash()
@@ -89,13 +90,19 @@ async def lifespan(app: FastAPI):
     embedding_provider_name = os.getenv("EMBEDDING_PROVIDER", "openai")
     generation_provider_name = os.getenv("GENERATION_PROVIDER", "openai")
 
-    if embedding_provider_name != "openai":
+    if embedding_provider_name == "openai":
+        app.state.embedding_provider = OpenAIEmbeddingProvider(model_name=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"))
+    elif embedding_provider_name == "ollama":
+        app.state.embedding_provider = OllamaEmbeddingProvider(model_name=os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"))
+    else:
         raise ValueError(f"Unsupported embedding provider: {embedding_provider_name}")
-    if generation_provider_name != "openai":
-        raise ValueError(f"Unsupported generation provider: {generation_provider_name}")
 
-    app.state.embedding_provider = OpenAIEmbeddingProvider()
-    app.state.generation_provider = OpenAIGenerationProvider()
+    if generation_provider_name == "openai":
+        app.state.generation_provider = OpenAIGenerationProvider(model_name=os.getenv("OPENAI_GENERATION_MODEL", "gpt-4o"))
+    elif generation_provider_name == "ollama":
+        app.state.generation_provider = OllamaGenerationProvider(model_name=os.getenv("OLLAMA_GENERATION_MODEL", "llama3.1:8b"))
+    else:
+        raise ValueError(f"Unsupported generation provider: {generation_provider_name}")
     await init_db()
     logger.info(
         "application dependencies initialized",

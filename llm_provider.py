@@ -23,12 +23,7 @@ class GenerationResult:
 
 
 class EmbeddingProvider(ABC):
-    @property
-    @abstractmethod
-    def model_name(self) -> str:
-        """
-        Return the provider's configured embedding model name.
-        """
+    model_name: str
 
     @abstractmethod
     def embed_texts(self, texts: List[str]) -> EmbeddingResult:
@@ -38,12 +33,7 @@ class EmbeddingProvider(ABC):
 
 
 class GenerationProvider(ABC):
-    @property
-    @abstractmethod
-    def model_name(self) -> str:
-        """
-        Return the provider's configured generation model name.
-        """
+    model_name: str
 
     @abstractmethod
     def generate(self, messages: List[Dict[str, str]]) -> GenerationResult:

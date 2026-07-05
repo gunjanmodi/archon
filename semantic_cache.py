@@ -77,7 +77,7 @@ async def lookup_cached_response(
     )
     return SemanticCacheHit(
         response_text=row["response_text"],
-        response_metadata=row["response_metadata"],
+        response_metadata=json.loads(row["response_metadata"]),
         similarity_score=row["similarity_score"]
     )
 

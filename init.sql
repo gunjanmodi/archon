@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS embeddings (
     id SERIAL PRIMARY KEY,
     text_chunk TEXT NOT NULL,
-    embedding vector(1536) NOT NULL,
+    embedding vector(768) NOT NULL,
     document_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE TABLE IF NOT EXISTS semantic_cache (
     id SERIAL PRIMARY KEY,
     query_text TEXT NOT NULL,
-    query_embedding vector(1536) NOT NULL,
+    query_embedding vector(768) NOT NULL,
     response_text TEXT NOT NULL,
     response_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     model_name VARCHAR(255) NOT NULL,
